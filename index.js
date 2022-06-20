@@ -1,210 +1,122 @@
 const { Api, TelegramClient } = require("telegram");
 const { StringSession } = require("telegram/sessions");
 const input = require("input");
+const fs = require("fs").promises;
+const path = require("path");
 
-const apiId = 11569401;
-const apiHash = "1cacad5b77f1eab5b9def5fd11deb55a";
+const messagesFile = path.resolve("messages", `${Date.now()}.json`);
+const parsedMessagesFile = path.resolve(
+  "messages",
+  `${Date.now()}_parsed.json`
+);
 
-const session = new StringSession("");
-const client = new TelegramClient(session, apiId, apiHash, {});
+const apiId = 17620472;
+const apiHash = "402a0787337887b617443fd09a7f3329";
+let stringSession = new StringSession(
+  `1AgAOMTQ5LjE1NC4xNjcuNTABu3lDMHm0X08BNUyA6B2QzN28pIkiHlrSRoMkgoOfGdS894bVG6pxnjYTxpCTePl/TbNzkDb4SlUhgle+7nxffyuBGIjr6bkDbM2W2wFC++wmuwv3MkgXTAoKhG7YJbsBa+W6QVstIF7co7EIRwKFQVMzkNDv04IgyRnFIhNYHOid61ZftL5LsfnkAYZ7xWB0Ark5QVSxSnbU0KnMoaYarExprntabierxvTxuf7cHQNx/wgxE1spYEXQ6NKV5l+vDDwayvroDBFsfYU0C+FqhakBY9T5s65ZbGb0q1ptoepnK0M5cDJhomHgHEHs/wpPUfoO79qsGzQHJPisZ2jH+DM=`
+);
+
+const client = new TelegramClient(stringSession, apiId, apiHash, {});
+
+let pts = /* 14968  */ 14978; // TODO: get the pts value from previously saved message
+let messagesToPoll = 1;
+let pollingInterval = 10 * 1000; // 2 min
+
+function getNewMessages(pts, limit) {
+  return client.invoke(
+    new Api.updates.GetChannelDifference({
+      channel: "air_alert_ua",
+      filter: new Api.ChannelMessagesFilterEmpty(),
+      pts,
+      limit,
+      force: true,
+    })
+  );
+}
+
+function isTooManyUpdates(response) {
+  return response && response.className === "updates.ChannelDifferenceTooLong";
+}
+
+function isNewMessagesResponse(response) {
+  return response && response.className === "updates.ChannelDifference";
+}
+
+async function writeMessagesToFile(data, file) {
+  try {appendFile
+    // write received messages to the local file
+    await fs.appendFile(file, JSON.stringify(data));
+  } catch (err) {
+    console.log("Append file error: ", err.message);
+    await fs.writeFile(file, JSON.stringify(data));
+  }
+}
+
+function alarmState(message) {
+  if (message.match(/🟢/)) return "stop";
+  if (message.match(/🔴/)) return "start";
+  if (message.match(/🟡/)) return "partial";
+}
+
+function getRegion(message) {
+  return message.match(/(?<=\#)(.*?)$/g)[0];
+}
+
+function getTime(message) {
+  return new Date(message.date * 1000).toLocaleTimeString();
+}
+
+function parseMessages(messages) {
+  return messages.map((messageData) => ({
+    message: messageData.message,
+    timestamp: messageData.date,
+    time: getTime(messageData),
+    region: getRegion(messageData.message),
+    state: alarmState(messageData.message),
+  }));
+}
 
 (async function run() {
-  await client.start({
+  // for initial req only - to get the StringSession value
+  /*   await client.start({
     phoneNumber: async () => await input.text("Please enter your number: "),
     password: async () => await input.text("Please enter your password: "),
     phoneCode: async () =>
       await input.text("Please enter the code you received: "),
     onError: (err) => console.log(err),
   });
+  stringSession = client.session.save();
+  console.log(stringSession); */
+
   await client.connect();
 
-  const result = await client.invoke(
-    // new Api.channels.GetFullChannel({
-    //   channel: "air_alert_ua",
-    // })
-    new Api.updates.GetChannelDifference({
-      channel: "air_alert_ua",
-      filter: /* new Api.ChannelMessagesFilter({
-        ranges: [
-          new Api.MessageRange({
-            minId: 0,
-            maxId: 1000000,
-          }),
-        ],
-        excludeNewMessages: true,
-      }) */ new Api.ChannelMessagesFilterEmpty(),
-      pts: 43,
-      limit: 10000,
-      force: true,
-    })
-  );
+  setInterval(async () => {
+    console.log("Sending request...");
+    console.log("pts: ", pts);
+    let result = await getNewMessages(pts, messagesToPoll);
 
-  //+380661206215
-  setInterval(() => console.log(result.messages[0].message), 2000);
-  //console.log(result); // prints the result
+    // too many new messages available, try to read them all before proceeding
+    while (isTooManyUpdates(result)) {
+      messagesToPoll += 50;
+      console.log(
+        "Too many updates, increasing the receiving messages number to ",
+        messagesToPoll
+      );
+      result = await getNewMessages(pts, messagesToPoll);
+    }
+
+    if (isNewMessagesResponse(result)) {
+      await writeMessagesToFile(result.toJSON(), messagesFile);
+      const parsedMessages = parseMessages(result.newMessages);
+      await writeMessagesToFile(parsedMessages, parsedMessagesFile);
+      pts = result.pts;
+      messagesToPoll = 1; // decreasing the messages number to initial
+      console.log(
+        "Got the response, number of new messages: ",
+        result.newMessages.length
+      );
+    } else {
+      console.log("No updates");
+    }
+  }, pollingInterval);
 })();
-
-/* let a = {
-  CONSTRUCTOR_ID: 2763835134,
-  SUBCLASS_OF_ID: 696872797,
-  className: "updates.ChannelDifferenceTooLong",
-  classType: "constructor",
-  flags: 1,
-  final: true,
-  timeout: null,
-  dialog: {
-    CONSTRUCTOR_ID: 2834157813,
-    SUBCLASS_OF_ID: 1120787796,
-    className: "Dialog",
-    classType: "constructor",
-    flags: 1,
-    pinned: false,
-    unreadMark: false,
-    peer: {
-      CONSTRUCTOR_ID: 2728736542,
-      SUBCLASS_OF_ID: 47470215,
-      className: "PeerChannel",
-      classType: "constructor",
-      channelId: [Integer],
-    },
-    topMessage: 14544,
-    readInboxMaxId: 14544,
-    readOutboxMaxId: 0,
-    unreadCount: 0,
-    unreadMentionsCount: 0,
-    unreadReactionsCount: 0,
-    notifySettings: {
-      CONSTRUCTOR_ID: 2822439974,
-      SUBCLASS_OF_ID: 3475030132,
-      className: "PeerNotifySettings",
-      classType: "constructor",
-      flags: 4,
-      showPreviews: null,
-      silent: null,
-      muteUntil: 2147483647,
-      iosSound: null,
-      androidSound: null,
-      otherSound: null,
-    },
-    pts: 14549,
-    draft: null,
-    folderId: null,
-  },
-  messages: [
-    {
-      CONSTRUCTOR_ID: 940666592,
-      SUBCLASS_OF_ID: 2030045667,
-      className: "Message",
-      classType: "constructor",
-      out: false,
-      mentioned: false,
-      mediaUnread: false,
-      silent: false,
-      post: true,
-      fromScheduled: false,
-      legacy: false,
-      editHide: false,
-      ttlPeriod: null,
-      id: 14544,
-      fromId: null,
-      peerId: [Object],
-      fwdFrom: null,
-      viaBotId: null,
-      replyTo: null,
-      date: 1655368045,
-      message:
-        "🟢 11:27 Відбій тривоги в Сумська область.\n" +
-        "Слідкуйте за подальшими повідомленнями.\n" +
-        "#Сумська_область",
-      media: null,
-      replyMarkup: null,
-      entities: [Array],
-      views: 17127,
-      forwards: 0,
-      replies: null,
-      editDate: null,
-      pinned: false,
-      postAuthor: null,
-      groupedId: null,
-      restrictionReason: null,
-      action: undefined,
-      noforwards: false,
-      reactions: null,
-      flags: 17536,
-    },
-  ],
-  chats: [
-    {
-      CONSTRUCTOR_ID: 2187439201,
-      SUBCLASS_OF_ID: 3316604308,
-      className: "Channel",
-      classType: "constructor",
-      flags: 139360,
-      creator: false,
-      left: false,
-      broadcast: true,
-      verified: false,
-      megagroup: false,
-      restricted: false,
-      signatures: false,
-      min: false,
-      scam: false,
-      hasLink: false,
-      hasGeo: false,
-      slowmodeEnabled: false,
-      callActive: false,
-      callNotEmpty: false,
-      fake: false,
-      gigagroup: false,
-      noforwards: false,
-      id: [Integer],
-      accessHash: [Integer],
-      title: "Повітряна Тривога",
-      username: "air_alert_ua",
-      photo: [Object],
-      date: 1655197789,
-      restrictionReason: null,
-      adminRights: null,
-      bannedRights: null,
-      defaultBannedRights: null,
-      participantsCount: 192593,
-    },
-  ],
-  users: [
-    {
-      CONSTRUCTOR_ID: 1073147056,
-      SUBCLASS_OF_ID: 765557111,
-      className: "User",
-      classType: "constructor",
-      flags: 33570859,
-      self: false,
-      contact: false,
-      mutualContact: false,
-      deleted: false,
-      bot: true,
-      botChatHistory: false,
-      botNochats: false,
-      verified: false,
-      restricted: false,
-      min: false,
-      botInlineGeo: false,
-      support: false,
-      scam: false,
-      applyMinPhoto: true,
-      fake: false,
-      botAttachMenu: false,
-      id: [Integer],
-      accessHash: [Integer],
-      firstName: "Channel",
-      lastName: null,
-      username: "Channel_Bot",
-      phone: null,
-      photo: [Object],
-      status: null,
-      botInfoVersion: 4,
-      restrictionReason: null,
-      botInlinePlaceholder: null,
-      langCode: null,
-    },
-  ],
-}; */
